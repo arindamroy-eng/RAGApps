@@ -11,7 +11,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pathlib import Path
 import hashlib
 
-OPENROUTE_MODEL = "openrouter/free"
+OPENROUTER_MODEL = "openrouter/free"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 
@@ -153,7 +153,7 @@ def track_usage_metrics(chunk: dict):
 
 async def stream_chat(messages, client, headers):
     payload = {
-        "model": OPENROUTE_MODEL,
+        "model": OPENROUTER_MODEL,
         "messages": messages,
         "stream": True,
     }
@@ -200,17 +200,19 @@ async def stream_chat(messages, client, headers):
     complete_text = "".join(full_reply)
     return complete_text
 
-def flush_context(conversation_history):
-    print(conversation_history)
-    conversation_history = [
-        {"role": "system", "content": "You are a helpful and concise AI assistant."}
-    ]
+def flush_context(conversation_history=None):
+    if conversation_history:
+        print(conversation_history)
+        conversation_history = [
+            {"role": "system", "content": "You are a helpful and concise AI assistant."}
+        ]
+    return conversation_history
 
 
 def parse_user_input_command(command_str=None):
     if command_str:
         if command_str == 'flush_context':
-            flush_context(conversation_history=conversation_history)
+            conversation_history=flush_context(conversation_history=conversation_history)
 
 # Maintains core conversation history (clean, un-duplicated history strings)
 conversation_history = [
@@ -227,7 +229,7 @@ async def main():
     # First-time setup: ingest documents
     if rag.collection.count() == 0:
         print("Ingesting documents...")
-        rag.ingest_documents()
+        rag.ingest()
 
     headers = {
         "Authorization": f"Bearer {API_KEY}",
