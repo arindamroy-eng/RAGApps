@@ -199,10 +199,7 @@ async def stream_chat(messages, client):
                 error_detail = await response.aread()
                 print(f"Status: {response.status_code}, Error: {error_detail.decode()}")
                 return
-            if response.status_code != 200:
-                print(f"\nError: {response}")
-                return ""
-
+            
             async for line in response.aiter_lines():
                 if not line:
                     continue
