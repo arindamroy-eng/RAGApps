@@ -10,23 +10,50 @@ from typing import List
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pathlib import Path
 import hashlib
+from dotenv import load_dotenv
+import requests
 
-OPENROUTER_MODEL = "openrouter/free"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-API_KEY = os.getenv("OPENROUTER_API_KEY")
+load_dotenv()
+# Configuration
+DOCS_DIRECTORY = os.getenv("DOCS_DIRECTORY", "./documents")  # Directory containing your documents
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # --- CONTEXT PLACEHOLDER SETUP ---
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # Local embedding model
-DOCS_DIRECTORY = "./documents"  # Directory containing your documents
-CHROMA_DB_DIR = "./chroma_db"
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")  # Local embedding model
+LLM_MODEL = os.getenv("LLM_MODEL", "openrouter/free")  # Model via OpenRouter
+CHROMA_DB_DIR = os.getenv("CHROMA_DB_DIR","./chroma_db")
+
+#print(OPENROUTER_API_KEY)
+#print(LLM_MODEL)
+#print(OPENROUTER_BASE_URL)
+
+#response = requests.post(
+#  url=f"{OPENROUTER_BASE_URL}",
+#  headers={
+#    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+#    "Content-Type": "application/json",
+#  },
+#  data=json.dumps({
+#    "model": "openrouter/free",
+#    "input": "Hello! What can you help me with today?"
+#  })
+#)
+#
+#data = response.json()
+#message = next(item for item in reversed(data['output']) if item['type'] == 'message')
+#print(next(part['text'] for part in message['content'] if part['type'] == 'output_text'))
+## Check which model was selected
+#print('Model used:', data['model'])
+#exit(0)
 
 class RAGSystem:
     def __init__(
         self,
-        db_dir= CHROMA_DB_DIR,
-        embedding_model= EMBEDDING_MODEL,
-        collection_name="documents",
-        batch_size=100,  # Number of chunks to insert into ChromaDB at once
+        db_dir: str = CHROMA_DB_DIR,
+        embedding_model: str = EMBEDDING_MODEL,
+        collection_name: str ="documents",
+        batch_size: int = 100,  # Number of chunks to insert into ChromaDB at once
     ):
         self.client = chromadb.PersistentClient(path=db_dir)
         self.embedding_func = (
@@ -114,7 +141,7 @@ class RAGSystem:
         if batch_documents:
             yield batch_documents, batch_ids, batch_metadatas
 
-    def ingest(self, target_directory: str):
+    def ingest(self, target_directory: str = DOCS_DIRECTORY):
         print(f"Starting streaming ingestion from: {target_directory}")
         total_chunks_added = 0
 
@@ -151,16 +178,27 @@ def track_usage_metrics(chunk: dict):
         print(f"Total Tokens:      {usage.get('total_tokens', 0)}")
         print(f"Estimated Cost:    ${usage.get('cost', 0.0):.7f}")
 
-async def stream_chat(messages, client, headers):
-    payload = {
-        "model": OPENROUTER_MODEL,
-        "messages": messages,
-        "stream": True,
+async def stream_chat(messages, client):
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
     }
-    
+    #print(headers)
+
+    payload = {
+        "model": f"{LLM_MODEL}",
+        "messages": messages,
+        "stream": True
+    }
+    #print(payload) 
     full_reply = []
     try:
-        async with client.stream("POST", OPENROUTER_URL, headers=headers, json=payload) as response:
+        async with client.stream("POST", OPENROUTER_BASE_URL, json=payload, headers=headers) as response:
+            if response.status_code != 200:
+                error_detail = await response.aread()
+                print(f"Status: {response.status_code}, Error: {error_detail.decode()}")
+                return
             if response.status_code != 200:
                 print(f"\nError: {response}")
                 return ""
@@ -220,23 +258,13 @@ conversation_history = [
 ]
 
 async def main():
-    if not API_KEY:
-        print("API_KEY not set, exiting\n")
-        return
 
     rag = RAGSystem()
 
     # First-time setup: ingest documents
     if rag.collection.count() == 0:
         print("Ingesting documents...")
-        rag.ingest()
-
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "HTTP-Referer": "http://localhost:8000",
-        "X-Title": "Python Context-Aware Client",
-        "Content-Type": "application/json",
-    }
+        rag.ingest(target_directory=DOCS_DIRECTORY)
 
     timeout = httpx.Timeout(60.0, connect=10.0)
     
@@ -261,6 +289,7 @@ async def main():
             if not context:
                 print("No relevant context found.\n")
                 continue
+            #print(context)
             context_text = "".join(context)
             contextual_content = f"Use the following context to answer the question: Context: {context_text}, Question: {user_input}, Answer:"
 
@@ -275,7 +304,7 @@ async def main():
             ephemeral_messages[-1] = {"role": "user", "content": contextual_content}
 
             # 3. Request inference stream using the contextual copy
-            assistant_response = await stream_chat(ephemeral_messages, client, headers)
+            assistant_response = await stream_chat(ephemeral_messages, client)
             
             # 4. Save response to main history array for continuous turn references
             if assistant_response:
